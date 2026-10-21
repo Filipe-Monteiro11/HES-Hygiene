@@ -18,3 +18,13 @@ DATABASES = {
         "CONN_HEALTH_CHECKS": True,
     }
 }
+
+IMAGEKIT_URL_ENDPOINT = config("IMAGEKIT_URL_ENDPOINT")
+IMAGEKIT_PRIVATE_KEY = config("IMAGEKIT_PRIVATE_KEY")
+
+STORAGES = {
+    **STORAGES,
+    "default": {
+        "BACKEND": "produtos.storage.ImageKitStorage",
+    },
+}
