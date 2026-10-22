@@ -1,4 +1,3 @@
-
 from .settings import *
 from decouple import config
 
