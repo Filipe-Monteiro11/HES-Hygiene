@@ -1,9 +1,11 @@
-    
+"""Armazenamento de imagens do Django no ImageKit."""
+
 import base64
 import io
 import json
 import mimetypes
 import uuid
+
 from pathlib import PurePosixPath
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -24,7 +26,8 @@ class ImageKitStorage(Storage):
         self.private_key = settings.IMAGEKIT_PRIVATE_KEY
 
     def url(self, name):
-        return f"{self.endpoint}/{quote(name.lstrip('/'), safe='/')}"
+        path = quote(str(name).lstrip("/"), safe="/")
+        return f"{self.endpoint}/{path}"
 
     def exists(self, name):
         request = Request(self.url(name), method="HEAD")
@@ -39,7 +42,7 @@ class ImageKitStorage(Storage):
 
     def _open(self, name, mode="rb"):
         if mode not in ("r", "rb"):
-            raise ValueError("Modo de abertura não suportado.")
+            raise ValueError("Modo de leitura inválido.")
 
         with urlopen(self.url(name), timeout=30) as response:
             content = response.read()
@@ -47,48 +50,62 @@ class ImageKitStorage(Storage):
         return File(io.BytesIO(content), name=name)
 
     def _save(self, name, content):
-        caminho = PurePosixPath(name)
+        path = PurePosixPath(str(name))
 
-        if caminho.is_absolute() or ".." in caminho.parts:
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or not path.name
+        ):
             raise ValueError("Caminho de imagem inválido.")
 
-        pasta = str(caminho.parent)
-        pasta = "/" if pasta == "." else f"/{pasta}"
+        folder = (
+            "/"
+            if str(path.parent) == "."
+            else f"/{path.parent}"
+        )
 
+        filename = path.name
         boundary = uuid.uuid4().hex
-        nome = caminho.name
 
-        campos = {
-            "fileName": nome,
-            "folder": pasta,
+        fields = {
+            "fileName": filename,
+            "folder": folder,
             "useUniqueFileName": "false",
             "overwriteFile": "false",
             "isPrivateFile": "false",
         }
 
-        partes = []
+        parts = []
 
-        for chave, valor in campos.items():
-            partes.append(
-                f"--{boundary}\r\n"
-                f'Content-Disposition: form-data; name="{chave}"\r\n\r\n'
-                f"{valor}\r\n".encode()
+        for key, value in fields.items():
+            parts.append(
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
+                    f"{value}\r\n"
+                ).encode()
             )
-
-        mime = mimetypes.guess_type(nome)[0] or "application/octet-stream"
 
         content.seek(0)
 
-        partes.extend([
-            (
-                f"--{boundary}\r\n"
-                f'Content-Disposition: form-data; name="file"; '
-                f'filename="{nome}"\r\n'
-                f"Content-Type: {mime}\r\n\r\n"
-            ).encode(),
-            content.read(),
-            f"\r\n--{boundary}--\r\n".encode(),
-        ])
+        mime = (
+            mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
+
+        parts.extend(
+            [
+                (
+                    f"--{boundary}\r\n"
+                    f'Content-Disposition: form-data; '
+                    f'name="file"; filename="{filename}"\r\n'
+                    f"Content-Type: {mime}\r\n\r\n"
+                ).encode(),
+                content.read(),
+                f"\r\n--{boundary}--\r\n".encode(),
+            ]
+        )
 
         auth = base64.b64encode(
             f"{self.private_key}:".encode()
@@ -96,20 +113,24 @@ class ImageKitStorage(Storage):
 
         request = Request(
             self.upload_url,
-            data=b"".join(partes),
+            data=b"".join(parts),
             headers={
                 "Authorization": f"Basic {auth}",
-                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "Content-Type": (
+                    f"multipart/form-data; boundary={boundary}"
+                ),
             },
             method="POST",
         )
 
         with urlopen(request, timeout=120) as response:
-            resultado = json.load(response)
+            result = json.load(response)
 
-        caminho_remoto = resultado["filePath"].lstrip("/")
+        remote_path = result["filePath"].lstrip("/")
 
-        if caminho_remoto != name.lstrip("/"):
-            raise ValueError("O ImageKit retornou um caminho diferente.")
+        if remote_path != str(path):
+            raise ValueError(
+                "O ImageKit retornou um caminho inesperado."
+            )
 
-        return caminho_remoto
+        return remote_path
